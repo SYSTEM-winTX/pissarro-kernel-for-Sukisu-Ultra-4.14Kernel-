@@ -1,4 +1,4 @@
-name: Build Pissarro Kernel with SukiSU Ultra (4.14)  # 明确内核版本
+name: Build Pissarro Kernel with SukiSU Ultra (4.14)
 
 on:
   workflow_dispatch:  # 手动触发编译
@@ -12,13 +12,13 @@ jobs:
       - name: Checkout Current Repository
         uses: actions/checkout@v4
 
-      # 2. 【路径修改】克隆目标内核源码仓库（https://github.com/SYSTEM-winTX/0）到kernel-source目录
+      # 2. 【路径更新】克隆目标内核源码仓库（https://github.com/MiCode/Xiaomi_Kernel_OpenSource/tree/pissarro-r-oss）到kernel-source目录
       - name: Checkout Kernel Source from Target Repository
         uses: actions/checkout@v4
         with:
-          repository: SYSTEM-winTX/0  # 修改为新的内核源码仓库URL
-          path: kernel-source           # 克隆到kernel-source目录（不变）
-          ref: main                    # 分支名（根据实际调整，如master）
+          repository: MiCode/Xiaomi_Kernel_OpenSource  # 新仓库路径
+          path: kernel-source           # 克隆到kernel-source目录
+          ref: pissarro-r-oss          # 分支名（根据实际调整）
           token: ${{ secrets.GITHUB_TOKEN }}  # 访问令牌（公开仓库可省略）
 
       # 3. 设置构建环境（安装依赖）
@@ -39,8 +39,8 @@ jobs:
           # --------------------------
           # 1. 强制克隆SukiSU_patch仓库（确保成功）
           # --------------------------
-          PATCH_REPO_URL="https://github.com/SukiSU-Ultra/SukiSU_patch.git"  # 官方地址
-          PATCH_DIR="patches"  # 克隆到当前目录的patches文件夹
+          PATCH_REPO_URL="https://github.com/SukiSU-Ultra/SukiSU_patch.git"
+          PATCH_DIR="patches"
           echo "🔍 Cloning SukiSU_patch repo (目标路径：$PATCH_DIR/4.14/ksu_hooks_4.14.patch)..."
           
           # 步骤1：删除残留的patches目录（避免旧文件干扰）
@@ -50,7 +50,7 @@ jobs:
           if git clone --depth=1 "$PATCH_REPO_URL" "$PATCH_DIR"; then
             echo "✅ 官方地址克隆成功"
           else
-            echo "⚠️ 官方地址失败，尝试代理地址..."
+            echo "⚠️ 官方地址失败,尝试代理地址..."
             if git clone --depth=1 "https://ghproxy.com/$PATCH_REPO_URL" "$PATCH_DIR"; then
               echo "✅ 代理地址克隆成功"
             else
@@ -92,10 +92,10 @@ jobs:
           if git am "$PATCH_PATH"; then
             echo "✅ 补丁应用成功（git am）"
           else
-            echo "⚠️ git am失败，尝试git apply --reject..."
+            echo "⚠️ git am失败,尝试git apply --reject..."
             git apply --reject "$PATCH_PATH"  # 生成.rej文件标记冲突
-            echo "⚠️ 冲突已保存到 *.rej 文件，编译将继续（可能不稳定）"
-            # 若需严格阻止失败，取消下一行注释：exit 1
+            echo "⚠️ 冲突已保存到 *.rej 文件,编译将继续（可能不稳定）"
+            # 若需严格阻止失败,取消下一行注释：exit 1
             # exit 1
           fi
           echo "✅ 补丁处理完成（冲突见.rej文件）"
@@ -106,7 +106,7 @@ jobs:
         run: |
           KDIR="$GITHUB_WORKSPACE/kernel-source"  # 内核源码在kernel-source目录（路径不变）
           if [ ! -d "$KDIR/arch" ]; then
-            echo "❌ ERROR: $KDIR/arch not found! Ensure target repo has kernel source (arch/arm64)"
+            echo "❌ ERROR: $KDIR/arch not found! 确保目标仓库包含完整内核源码"
             exit 1
           fi
           echo "✅ Kernel root directory (KDIR): $KDIR"
@@ -133,7 +133,7 @@ jobs:
           echo "✅ Found defconfig: $DEFCONFIG (for pissarro)"
           echo "DEFCONFIG=$DEFCONFIG" >> $GITHUB_ENV
 
-      # 7. 编译内核（ARM64架构，交叉编译）
+      # 7. 编译内核（ARM64架构,交叉编译）
       - name: Build Kernel (4.14)
         run: |
           cd $KDIR
@@ -148,7 +148,7 @@ jobs:
           find drivers -name "modules.builtin" -exec rm {} \; || true
           find drivers -type d -exec touch {}/modules.builtin \; || true
           
-          # 并行编译（-j$(nproc)），失败则单线程重试
+          # 并行编译（-j$(nproc)）,失败则单线程重试
           echo "🔨 Building kernel with $(nproc) threads..."
           if ! make -j$(nproc); then
             echo "⚠️ Parallel build failed, retrying in single-thread mode"
@@ -163,7 +163,7 @@ jobs:
           OUTPUT_DIR="$GITHUB_WORKSPACE/output"
           mkdir -p $OUTPUT_DIR
           
-          # 优先找GKI格式的Image.gz-dtb，其次找Image
+          # 优先找GKI格式的Image.gz-dtb,其次找Image
           if [ -f arch/arm64/boot/Image.gz-dtb ]; then
             cp arch/arm64/boot/Image.gz-dtb $OUTPUT_DIR/kernel.img
             echo "✅ Found Image.gz-dtb (GKI format)"
@@ -184,8 +184,8 @@ jobs:
             echo "✅ 使用SukiSU_patch仓库的AnyKernel3模板（路径：$PATCH_ANYKERNEL_DIR）"
             cp -r "$PATCH_ANYKERNEL_DIR" anykernel3  # 复制到工作流目录
           else
-            # 方案2：若模板不存在，手动克隆默认AnyKernel3（备用）
-            echo "⚠️ SukiSU_patch仓库未找到AnyKernel3模板，克隆默认模板"
+            # 方案2：若模板不存在,手动克隆默认模板
+            echo "⚠️ SukiSU_patch仓库未找到AnyKernel3模板,克隆默认模板"
             git clone https://ghproxy.com/https://github.com/osm0sis/AnyKernel3.git anykernel3 --depth=1
           fi
           
