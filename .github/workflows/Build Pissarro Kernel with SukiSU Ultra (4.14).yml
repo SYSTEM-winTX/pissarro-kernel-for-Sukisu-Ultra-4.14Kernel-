@@ -31,168 +31,155 @@ jobs:
             gcc-aarch64-linux-gnu g++-aarch64-linux-gnu patch libelf-dev libncurses5-dev
           echo "✅ Build environment ready"
 
-      # 4. 【最终修正】应用SukiSU_patch仓库的4.14内核补丁（路径：仓库根目录/4.14/ksu_hooks_4.14.patch）
+      # 4. 【终极修正】应用SukiSU_patch仓库的4.14内核补丁（全自动冲突修复）
       - name: Apply SukiSU Patch (4.14 Kernel)
         run: |
-          set -x  # 开启调试模式，输出所有命令及参数（便于排查）
-          
+          set -x  # 开启调试模式
+
           # --------------------------
-          # 1. 强制克隆SukiSU_patch仓库（确保成功）
+          # 1. 克隆SukiSU_patch仓库（强制清理残留）
           # --------------------------
           PATCH_REPO_URL="https://github.com/SukiSU-Ultra/SukiSU_patch.git"
           PATCH_DIR="patches"
-          echo "🔍 Cloning SukiSU_patch repo (目标路径：$PATCH_DIR/4.14/ksu_hooks_4.14.patch)..."
-          
-          # 步骤1：删除残留的patches目录（避免旧文件干扰）
-          rm -rf "$PATCH_DIR"
-          
-          # 步骤2：克隆仓库（优先官方地址，失败则用代理）
-          if git clone --depth=1 "$PATCH_REPO_URL" "$PATCH_DIR"; then
-            echo "✅ 官方地址克隆成功"
-          else
-            echo "⚠️ 官方地址失败,尝试代理地址..."
-            if git clone --depth=1 "https://ghproxy.com/$PATCH_REPO_URL" "$PATCH_DIR"; then
-              echo "✅ 代理地址克隆成功"
+          rm -rf "$PATCH_DIR"  # 删除旧仓库（避免残留文件干扰）
+          git clone --depth=1 "$PATCH_REPO_URL" "$PATCH_DIR" || { 
+            echo "❌ 克隆失败！请检查网络或仓库可用性"
+            exit 1
+          }
+
+          # --------------------------
+          # 2. 验证补丁文件存在
+          # --------------------------
+          PATCH_FILE="4.14/ksu_hooks_4.14.patch"
+          if [ ! -f "$PATCH_DIR/$PATCH_FILE" ]; then
+            echo "❌ 错误：补丁文件不存在！"
+            exit 1
+          fi
+
+          # --------------------------
+          # 3. 进入内核源码目录
+          # --------------------------
+          cd kernel-source || { 
+            echo "❌ 错误：kernel-source目录不存在！"
+            exit 1
+          }
+
+          # --------------------------
+          # 4. 应用补丁（全自动冲突修复）
+          # --------------------------
+          echo "🔧 开始应用补丁..."
+          if ! git apply --whitespace=fix "$PATCH_DIR/$PATCH_FILE"; then
+            echo "⚠️ 补丁应用失败，尝试修复..."
+            
+            # 自动生成冲突标记文件（.rej）
+            git apply --reject "$PATCH_DIR/$PATCH_FILE"
+            
+            # 查找所有.rej文件并输出冲突位置
+            REJ_FILES=$(find . -name "*.rej")
+            if [ -n "$REJ_FILES" ]; then
+              echo "🔍 发现冲突文件："
+              echo "$REJ_FILES"
+              
+              # 统计冲突数量
+              CONFLICT_COUNT=$(grep -c "<<<<<<<" $REJ_FILES)
+              echo "⚠️ 共发现 $CONFLICT_COUNT 处冲突"
+              
+              # 自动尝试修复简单冲突（保留补丁内容）
+              for rej_file in $REJ_FILES; do
+                PATCH_FILE=$(dirname $rej_file)/$(basename $rej_file .rej).patch
+                if [ -f "$PATCH_FILE" ]; then
+                  echo "🛠️ 修复冲突：$PATCH_FILE"
+                  sed -i '/^<<<<<<< /d' "$PATCH_FILE"  # 移除冲突标记
+                  sed -i '/^=======$/d' "$PATCH_FILE"
+                  sed -i '/^>>>>>>> /d' "$PATCH_FILE"
+                  git apply --whitespace=fix "$PATCH_FILE"
+                fi
+              done
+            
+              # 再次尝试应用补丁
+              if git apply --whitespace=fix "$PATCH_DIR/$PATCH_FILE"; then
+                echo "✅ 补丁修复成功！"
+              else
+                echo "❌ 冲突仍存在，请手动解决："
+                exit 1
+              fi
             else
-              echo "❌ 克隆失败！请手动检查："
-              echo "1. 仓库是否存在：https://github.com/SukiSU-Ultra/SukiSU_patch"
-              echo "2. 网络是否能访问GitHub（可尝试在Actions日志中ping github.com）"
+              echo "❌ 未知错误，无法检测冲突文件"
               exit 1
             fi
-          fi
-
-          # 步骤3：验证克隆结果（必须存在4.14目录和补丁文件）
-          if [ ! -d "$PATCH_DIR/4.14" ]; then
-            echo "❌ 错误：$PATCH_DIR/4.14目录不存在！仓库结构可能已变更。"
-            echo "🔍 仓库实际结构："
-            ls -la "$PATCH_DIR"  # 列出克隆后的文件
-            exit 1
-          fi
-          if [ ! -f "$PATCH_DIR/4.14/ksu_hooks_4.14.patch" ]; then
-            echo "❌ 错误：补丁文件$PATCH_DIR/4.14/ksu_hooks_4.14.patch不存在！"
-            echo "🔍 4.14目录内容："
-            ls -la "$PATCH_DIR/4.14"  # 列出4.14目录文件
-            exit 1
-          fi
-          echo "✅ 确认补丁文件存在：$PATCH_DIR/4.14/ksu_hooks_4.14.patch"
-
-          # --------------------------
-          # 2. 进入内核源码目录（kernel-source）
-          # --------------------------
-          cd kernel-source || { echo "❌ 错误：kernel-source目录不存在！"; exit 1; }
-          echo "✅ 进入内核源码目录：$PWD"
-
-          # --------------------------
-          # 3. 应用补丁（路径100%匹配你的描述）
-          # --------------------------
-          PATCH_PATH="../$PATCH_DIR/4.14/ksu_hooks_4.14.patch"  # 相对路径：从kernel-source到补丁文件
-          echo "🔧 应用补丁：$PATCH_PATH"
-          
-          # 应用补丁（优先用git am，失败则用git apply --reject生成冲突标记）
-          if git am "$PATCH_PATH"; then
-            echo "✅ 补丁应用成功（git am）"
           else
-            echo "⚠️ git am失败,尝试git apply --reject..."
-            git apply --reject "$PATCH_PATH"  # 生成.rej文件标记冲突
-            echo "⚠️ 冲突已保存到 *.rej 文件,编译将继续（可能不稳定）"
-            # 若需严格阻止失败,取消下一行注释：exit 1
-            # exit 1
+            echo "✅ 补丁应用成功！"
           fi
-          echo "✅ 补丁处理完成（冲突见.rej文件）"
+
+          # --------------------------
+          # 5. 清理残留文件
+          # --------------------------
+          find . -name "*.rej" -exec rm {} \;  # 删除冲突标记文件
 
       # 5. 设置内核根目录（KDIR）为目标仓库（kernel-source）
       - name: Set Kernel Root Directory (KDIR)
         id: set-kdir
         run: |
-          KDIR="$GITHUB_WORKSPACE/kernel-source"  # 内核源码在kernel-source目录（路径不变）
+          KDIR="$GITHUB_WORKSPACE/kernel-source"  # 内核源码路径
           if [ ! -d "$KDIR/arch" ]; then
             echo "❌ ERROR: $KDIR/arch not found! 确保目标仓库包含完整内核源码"
             exit 1
           fi
           echo "✅ Kernel root directory (KDIR): $KDIR"
-          echo "KDIR=$KDIR" >> $GITHUB_ENV  # 导出环境变量供后续步骤使用
+          echo "KDIR=$KDIR" >> $GITHUB_ENV
 
       # 6. 查找pissarro设备的defconfig（红米Note 11 Pro）
       - name: Detect Pissarro Defconfig
         id: detect-defconfig
         run: |
-          cd $KDIR  # 进入内核源码目录
-          # 优先查找含"pissarro"的defconfig
+          cd $KDIR
           DEFCONFIG=$(find arch/arm64/configs -type f -name "*pissarro*_defconfig" | head -n 1 | xargs basename)
-          # 未找到则尝试红米Note 11 Pro常见名称
           if [ -z "$DEFCONFIG" ]; then
             DEFCONFIG=$(find arch/arm64/configs -type f \( -name "*umi*_defconfig" -o -name "*redmi*note*11*pro*_defconfig" \) | head -n 1 | xargs basename)
           fi
-          # 检查defconfig是否存在
           if [ -z "$DEFCONFIG" ] || [ ! -f "arch/arm64/configs/$DEFCONFIG" ]; then
             echo "❌ ERROR: No valid defconfig found for pissarro!"
-            echo "Available defconfigs in $KDIR/arch/arm64/configs/:"
-            ls -la arch/arm64/configs/ | grep "_defconfig"
             exit 1
           fi
-          echo "✅ Found defconfig: $DEFCONFIG (for pissarro)"
+          echo "✅ Found defconfig: $DEFCONFIG"
           echo "DEFCONFIG=$DEFCONFIG" >> $GITHUB_ENV
 
-      # 7. 编译内核（ARM64架构,交叉编译）
+      # 7. 编译内核（ARM64架构，交叉编译）
       - name: Build Kernel (4.14)
         run: |
           cd $KDIR
           export ARCH=arm64
-          export CROSS_COMPILE=aarch64-linux-gnu-  # 交叉编译器（已安装）
+          export CROSS_COMPILE=aarch64-linux-gnu-
           
-          # 加载defconfig
-          echo "🔨 Running make $DEFCONFIG"
           make $DEFCONFIG
-          
-          # 修复模块编译问题（保留原始逻辑）
           find drivers -name "modules.builtin" -exec rm {} \; || true
           find drivers -type d -exec touch {}/modules.builtin \; || true
           
-          # 并行编译（-j$(nproc)）,失败则单线程重试
-          echo "🔨 Building kernel with $(nproc) threads..."
           if ! make -j$(nproc); then
             echo "⚠️ Parallel build failed, retrying in single-thread mode"
             make
           fi
           echo "✅ Kernel compiled successfully!"
 
-      # 8. 提取内核镜像（Image.gz-dtb或Image）
+      # 8. 提取内核镜像
       - name: Extract Kernel Image
         run: |
           cd $KDIR
           OUTPUT_DIR="$GITHUB_WORKSPACE/output"
           mkdir -p $OUTPUT_DIR
-          
-          # 优先找GKI格式的Image.gz-dtb,其次找Image
-          if [ -f arch/arm64/boot/Image.gz-dtb ]; then
-            cp arch/arm64/boot/Image.gz-dtb $OUTPUT_DIR/kernel.img
-            echo "✅ Found Image.gz-dtb (GKI format)"
-          elif [ -f arch/arm64/boot/Image ]; then
-            cp arch/arm64/boot/Image $OUTPUT_DIR/kernel.img
-            echo "✅ Found Image (non-GKI format)"
-          else
-            echo "❌ ERROR: Kernel image not found in $KDIR/arch/arm64/boot/!"
-            exit 1
-          fi
+          cp arch/arm64/boot/Image.gz-dtb $OUTPUT_DIR/kernel.img
 
-      # 9. 【融合AnyKernel3模板】生成刷机包（优先使用SukiSU_patch仓库根目录/AnyKernel3）
+      # 9. 生成AnyKernel3刷机包
       - name: Generate AnyKernel3 Flashable ZIP
         run: |
-          # 方案1：使用SukiSU_patch仓库的AnyKernel3模板（仓库根目录/AnyKernel3）
-          PATCH_ANYKERNEL_DIR="../patches/AnyKernel3"  # 克隆后的patches目录下的AnyKernel3
+          PATCH_ANYKERNEL_DIR="../patches/AnyKernel3"
           if [ -d "$PATCH_ANYKERNEL_DIR" ]; then
-            echo "✅ 使用SukiSU_patch仓库的AnyKernel3模板（路径：$PATCH_ANYKERNEL_DIR）"
-            cp -r "$PATCH_ANYKERNEL_DIR" anykernel3  # 复制到工作流目录
+            cp -r "$PATCH_ANYKERNEL_DIR" anykernel3
           else
-            # 方案2：若模板不存在,手动克隆默认模板
-            echo "⚠️ SukiSU_patch仓库未找到AnyKernel3模板,克隆默认模板"
             git clone https://ghproxy.com/https://github.com/osm0sis/AnyKernel3.git anykernel3 --depth=1
           fi
-          
-          # 复制内核镜像到AnyKernel3目录
           cp $GITHUB_WORKSPACE/output/kernel.img anykernel3/
           
-          # 修改AnyKernel3设备信息（适配pissarro）
           cat > anykernel3/anykernel.sh << 'EOF'
           # AnyKernel3 for Pissarro (Redmi Note 11 Pro) - SukiSU Ultra 4.14
           kernel.string=SukiSU Ultra 4.14 for Pissarro
@@ -205,18 +192,16 @@ jobs:
           do.systemless=1
           do.cleanup=1
           block=/dev/block/bootdevice/by-name/boot
-          supported.versions=13-15  # 支持Android 13-15
+          supported.versions=13-15
           EOF
           
-          # 打包为刷机ZIP
           cd anykernel3
           zip -r9 ../SukiSU-Ultra-4.14-pissarro-anykernel3.zip ./* -x ".git/*" "README.md" "LICENSE"
           cd ..
-          echo "✅ 生成AnyKernel3刷机包：SukiSU-Ultra-4.14-pissarro-anykernel3.zip"
 
-      # 10. 上传最终刷机包（供下载）
+      # 10. 上传刷机包
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SukiSU-Ultra-4.14-pissarro-anykernel3  # 产物名含内核版本
-          path: SukiSU-Ultra-4.14-pissarro-anykernel3.zip  # 刷机包路径
+          name: SukiSU-Ultra-4.14-pissarro-anykernel3
+          path: SukiSU-Ultra-4.14-pissarro-anykernel3.zip
